@@ -2,7 +2,7 @@ FROM node:20-slim
 
 # Install git (needed for cloning repos) and curl (for health checks)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl && \
+    apt-get install -y --no-install-recommends git curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI globally
