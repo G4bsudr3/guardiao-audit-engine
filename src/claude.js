@@ -11,48 +11,111 @@ const REVIEW_TIMEOUT = parseInt(process.env.REVIEW_TIMEOUT_MINUTES || '15', 10) 
 
 /**
  * Run Claude Code CLI with a prompt against a repo directory.
- * Returns the parsed JSON array of vulnerabilities.
+ * Streams stderr to console for real-time progress.
+ * Returns { vulns, cost_usd, duration_ms, num_turns, input_tokens, output_tokens }.
  */
 async function runClaude(repoPath, prompt, { model, timeout, maxTurns }) {
   console.log(`[claude] Running (model=${model}, maxTurns=${maxTurns}, timeout=${timeout / 60000}min)`);
 
-  const { stdout } = await execa('claude', [
+  const subprocess = execa('claude', [
     '-p', prompt,
-    '--output-format', 'json',
+    '--output-format', 'stream-json',
     '--max-turns', String(maxTurns),
     '--model', model,
   ], {
     cwd: repoPath,
     timeout,
-    env: {
-      ...process.env,
-      // Claude Code CLI uses ANTHROPIC_API_KEY from env automatically
-    },
-    // Capture all output, don't let it go to parent stderr
+    env: { ...process.env },
     reject: true,
+    buffer: true,
   });
 
-  return extractJson(stdout);
+  // Stream stderr for real-time progress
+  if (subprocess.stderr) {
+    subprocess.stderr.on('data', (chunk) => {
+      const line = chunk.toString().trim();
+      if (line) console.log(`[claude:stderr] ${line}`);
+    });
+  }
+
+  // Collect stdout lines for stream-json parsing
+  const lines = [];
+  if (subprocess.stdout) {
+    subprocess.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        lines.push(trimmed);
+
+        // Log interesting events in real-time
+        try {
+          const event = JSON.parse(trimmed);
+          if (event.type === 'assistant' && event.message?.content) {
+            for (const block of event.message.content) {
+              if (block.type === 'tool_use') {
+                console.log(`[claude] Tool: ${block.name} ${block.input?.file_path || block.input?.command || block.input?.pattern || ''}`);
+              }
+              if (block.type === 'text' && block.text?.length < 200) {
+                console.log(`[claude] ${block.text.substring(0, 150)}`);
+              }
+            }
+          }
+          if (event.type === 'result') {
+            console.log(`[claude] Finished: ${event.num_turns} turns, cost=$${event.total_cost_usd?.toFixed(4) || '0'}, duration=${Math.round((event.duration_ms || 0) / 1000)}s`);
+          }
+        } catch {
+          // Not JSON, ignore
+        }
+      }
+    });
+  }
+
+  await subprocess;
+
+  return extractFromStreamJson(lines);
 }
 
 /**
- * Extract a JSON array from Claude's output.
- * Claude Code with --output-format json wraps the response in a JSON structure.
- * We need to extract the vulnerability array from it.
+ * Extract vulnerabilities + stats from stream-json output.
  */
-function extractJson(raw) {
-  // --output-format json returns { result: "...", ... }
-  // The "result" field contains the text output which should be a JSON array
-  try {
-    const wrapper = JSON.parse(raw);
-    const text = wrapper.result || wrapper.content || raw;
+function extractFromStreamJson(lines) {
+  let resultText = '';
+  let stats = { cost_usd: 0, duration_ms: 0, num_turns: 0, input_tokens: 0, output_tokens: 0 };
 
-    // If text is already an array, return it
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const event = JSON.parse(lines[i]);
+      if (event.type === 'result') {
+        if (!resultText && event.result) resultText = event.result;
+        stats.cost_usd = event.total_cost_usd || 0;
+        stats.duration_ms = event.duration_ms || 0;
+        stats.num_turns = event.num_turns || 0;
+        stats.input_tokens = event.usage?.input_tokens || 0;
+        stats.output_tokens = event.usage?.output_tokens || 0;
+        break;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!resultText) {
+    console.error('[claude] No result event found in stream output');
+    return { vulns: [], ...stats };
+  }
+
+  return { vulns: extractJson(resultText), ...stats };
+}
+
+/**
+ * Extract a JSON array from Claude's text result.
+ */
+function extractJson(text) {
+  try {
     if (Array.isArray(text)) return text;
 
-    // Try to parse the text as JSON
     if (typeof text === 'string') {
-      // Strip markdown code fences if present
       const cleaned = text
         .replace(/^```(?:json)?\s*\n?/m, '')
         .replace(/\n?```\s*$/m, '')
@@ -64,8 +127,7 @@ function extractJson(raw) {
 
     return [];
   } catch {
-    // Fallback: try to find a JSON array anywhere in the raw output
-    const match = raw.match(/\[[\s\S]*\]/);
+    const match = (typeof text === 'string' ? text : '').match(/\[[\s\S]*\]/);
     if (match) {
       try {
         return JSON.parse(match[0]);
@@ -73,7 +135,7 @@ function extractJson(raw) {
         // ignore
       }
     }
-    console.error('[claude] Failed to parse JSON from output. Raw length:', raw.length);
+    console.error('[claude] Failed to parse JSON from result. Length:', String(text).length);
     return [];
   }
 }
@@ -92,40 +154,41 @@ function isValidVuln(v) {
 
 /**
  * Run Pass 1: Comprehensive security audit.
+ * Returns { vulns, cost_usd, duration_ms, num_turns, input_tokens, output_tokens }
  */
 export async function runAuditPass(repoPath, model) {
   const promptTemplate = await fs.readFile(path.join(PROMPTS_DIR, 'audit.md'), 'utf-8');
 
-  const vulns = await runClaude(repoPath, promptTemplate, {
+  const result = await runClaude(repoPath, promptTemplate, {
     model,
     timeout: AUDIT_TIMEOUT,
     maxTurns: 50,
   });
 
-  const valid = vulns.filter(isValidVuln);
-  console.log(`[claude] Pass 1 complete: ${valid.length} vulnerabilities found (${vulns.length} raw)`);
-  return valid;
+  const valid = result.vulns.filter(isValidVuln);
+  console.log(`[claude] Pass 1 complete: ${valid.length} vulnerabilities found (${result.vulns.length} raw), cost=$${result.cost_usd.toFixed(4)}`);
+  return { ...result, vulns: valid };
 }
 
 /**
  * Run Pass 2: Review and validate findings from Pass 1.
+ * Returns { vulns, cost_usd, duration_ms, num_turns, input_tokens, output_tokens }
  */
 export async function runReviewPass(repoPath, pass1Vulns, model) {
   const promptTemplate = await fs.readFile(path.join(PROMPTS_DIR, 'review.md'), 'utf-8');
 
-  // Inject Pass 1 results into the review prompt
   const prompt = promptTemplate.replace(
     '<<PASS_1_RESULTS>>',
     JSON.stringify(pass1Vulns, null, 2),
   );
 
-  const vulns = await runClaude(repoPath, prompt, {
+  const result = await runClaude(repoPath, prompt, {
     model,
     timeout: REVIEW_TIMEOUT,
     maxTurns: 30,
   });
 
-  const valid = vulns.filter(isValidVuln);
-  console.log(`[claude] Pass 2 complete: ${valid.length} confirmed (from ${pass1Vulns.length} candidates)`);
-  return valid;
+  const valid = result.vulns.filter(isValidVuln);
+  console.log(`[claude] Pass 2 complete: ${valid.length} confirmed (from ${pass1Vulns.length} candidates), cost=$${result.cost_usd.toFixed(4)}`);
+  return { ...result, vulns: valid };
 }
