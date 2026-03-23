@@ -20,6 +20,7 @@ async function runClaude(repoPath, prompt, { model, timeout, maxTurns }) {
   const subprocess = execa('claude', [
     '-p', prompt,
     '--output-format', 'stream-json',
+    '--verbose',
     '--max-turns', String(maxTurns),
     '--model', model,
   ], {
