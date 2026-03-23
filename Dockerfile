@@ -1,9 +1,10 @@
 FROM node:20-slim
 
-# Install git (needed for cloning repos) and curl (for health checks)
+# Install system dependencies (git, curl, SSL certs)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git curl ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    update-ca-certificates
 
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
