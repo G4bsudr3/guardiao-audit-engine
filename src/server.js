@@ -80,7 +80,7 @@ app.post('/api/audit', requireApiKey, async (req, res) => {
     lovable_project_id,
     aplicacao_id: aplicacao_id || null,
     security_analysis_id: security_analysis_id || null,
-    model: model || 'claude-sonnet-4-6',
+    model: model || process.env.DEFAULT_MODEL || 'claude-sonnet-4-6',
     requested_at: new Date().toISOString(),
   });
 
