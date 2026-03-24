@@ -11,10 +11,16 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const API_KEY = process.env.AUDIT_SERVICE_API_KEY;
 
 const ALLOWED_MODELS = [
+  // Anthropic direct
   'claude-sonnet-4-6',
   'claude-opus-4-6',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-4-5-20241022',
+  // AWS Bedrock
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  'us.anthropic.claude-opus-4-20250514-v1:0',
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  'us.anthropic.claude-sonnet-4-20250514-v1:0',
 ];
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'claude-sonnet-4-6';
 
@@ -176,6 +182,6 @@ app.get('/api/audit/:jobId', requireApiKey, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[audit-engine] API listening on port ${PORT}`);
   // Sanitize Redis URL to avoid logging password
-  const safeRedisUrl = REDIS_URL.replace(/:([^@]+)@/, ':***@');
+  const safeRedisUrl = REDIS_URL.replace(/\/\/.*@/, '//***@');
   console.log(`[audit-engine] Redis: ${safeRedisUrl}`);
 });

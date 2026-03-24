@@ -22,8 +22,18 @@ async function runClaude(repoPath, prompt, { model, timeout, maxTurns }) {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     NODE_ENV: process.env.NODE_ENV,
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   };
+
+  // Support both direct Anthropic API and AWS Bedrock
+  if (process.env.CLAUDE_CODE_USE_BEDROCK === '1') {
+    cleanEnv.CLAUDE_CODE_USE_BEDROCK = '1';
+    cleanEnv.AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
+    cleanEnv.AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
+    cleanEnv.AWS_REGION = process.env.AWS_REGION;
+    if (process.env.AWS_SESSION_TOKEN) cleanEnv.AWS_SESSION_TOKEN = process.env.AWS_SESSION_TOKEN;
+  } else {
+    cleanEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+  }
 
   const subprocess = execa('claude', [
     '-p', prompt,
