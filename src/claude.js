@@ -17,16 +17,25 @@ const REVIEW_TIMEOUT = parseInt(process.env.REVIEW_TIMEOUT_MINUTES || '15', 10) 
 async function runClaude(repoPath, prompt, { model, timeout, maxTurns }) {
   console.log(`[claude] Running (model=${model}, maxTurns=${maxTurns}, timeout=${timeout / 60000}min)`);
 
+  // Build a clean env: only pass what Claude CLI needs, not secrets like GITHUB_PAT
+  const cleanEnv = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    NODE_ENV: process.env.NODE_ENV,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  };
+
   const subprocess = execa('claude', [
     '-p', prompt,
     '--output-format', 'stream-json',
     '--verbose',
     '--max-turns', String(maxTurns),
     '--model', model,
+    '--allowedTools', 'Read,Glob,Grep',
   ], {
     cwd: repoPath,
     timeout,
-    env: { ...process.env },
+    env: cleanEnv,
     reject: true,
     buffer: true,
   });

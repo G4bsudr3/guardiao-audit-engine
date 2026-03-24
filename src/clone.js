@@ -8,6 +8,44 @@ const CLONE_DEPTH = parseInt(process.env.CLONE_DEPTH || '1', 10);
 const MAX_REPO_SIZE_MB = parseInt(process.env.MAX_REPO_SIZE_MB || '500', 10);
 
 /**
+ * Parse and validate a GitHub HTTPS URL.
+ * Returns { owner, repo } or throws.
+ */
+function parseGitHubUrl(repoUrl) {
+  let parsed;
+  try {
+    parsed = new URL(repoUrl);
+  } catch {
+    throw new Error(`Invalid URL: ${repoUrl}`);
+  }
+
+  if (parsed.hostname !== 'github.com') {
+    throw new Error(`Invalid hostname: ${parsed.hostname} (expected github.com)`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Invalid protocol: ${parsed.protocol} (expected https:)`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('URL must not contain credentials');
+  }
+
+  const segments = parsed.pathname.replace(/\.git$/, '').split('/').filter(Boolean);
+  if (segments.length < 2) {
+    throw new Error('URL must contain owner and repo (https://github.com/owner/repo)');
+  }
+
+  const owner = segments[0];
+  const repo = segments[1];
+
+  // Prevent path traversal
+  if (/[^a-zA-Z0-9._-]/.test(owner) || /[^a-zA-Z0-9._-]/.test(repo)) {
+    throw new Error('Owner/repo contain invalid characters');
+  }
+
+  return { owner, repo };
+}
+
+/**
  * Clone a GitHub repository into an isolated working directory.
  * Returns the absolute path to the cloned repo.
  */
@@ -16,30 +54,34 @@ export async function cloneRepo(repoUrl, jobId) {
     throw new Error('GITHUB_PAT is not configured');
   }
 
-  // Inject token into URL for private repos
-  const authedUrl = repoUrl.replace(
-    'https://github.com/',
-    `https://${GITHUB_PAT}@github.com/`,
-  );
+  const { owner, repo } = parseGitHubUrl(repoUrl);
+
+  // Build authenticated URL safely
+  const authedUrl = `https://${GITHUB_PAT}@github.com/${owner}/${repo}.git`;
 
   const jobDir = path.join(WORK_DIR, `audit-${jobId}`);
   await fs.mkdir(jobDir, { recursive: true });
 
-  const repoName = repoUrl.split('/').pop().replace(/\.git$/, '');
-  const repoPath = path.join(jobDir, repoName);
+  const repoPath = path.join(jobDir, repo);
 
-  console.log(`[clone] Cloning ${repoUrl} (depth ${CLONE_DEPTH}) into ${repoPath}`);
+  console.log(`[clone] Cloning github.com/${owner}/${repo} (depth ${CLONE_DEPTH}) into ${repoPath}`);
 
-  await execa('git', [
-    'clone',
-    '--depth', String(CLONE_DEPTH),
-    '--single-branch',
-    authedUrl,
-    repoPath,
-  ], {
-    timeout: 5 * 60_000, // 5 min timeout for clone
-    env: { GIT_TERMINAL_PROMPT: '0' }, // never prompt for credentials
-  });
+  try {
+    await execa('git', [
+      'clone',
+      '--depth', String(CLONE_DEPTH),
+      '--single-branch',
+      authedUrl,
+      repoPath,
+    ], {
+      timeout: 5 * 60_000, // 5 min timeout for clone
+      env: { GIT_TERMINAL_PROMPT: '0' }, // never prompt for credentials
+    });
+  } catch (err) {
+    // Sanitize error to prevent GITHUB_PAT leaking in logs/stack traces
+    const sanitized = (err.message || '').replaceAll(GITHUB_PAT, '***');
+    throw new Error(`Git clone failed (exit ${err.exitCode ?? 'unknown'}): ${sanitized}`);
+  }
 
   // Check repo size
   const sizeBytes = await getDirSize(repoPath);

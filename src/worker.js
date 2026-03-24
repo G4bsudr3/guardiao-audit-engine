@@ -177,23 +177,24 @@ function buildMetadata(job, startTime, pass1Count, pass2Count, model, costUsd, i
 function buildSummary(vulns) {
   const counts = { critica: 0, alta: 0, media: 0, baixa: 0, info: 0 };
   for (const v of vulns) {
-    const c = normalizeCriticidade(v.criticidade || v.severity || 'Info');
-    if (c === 'Crítica') counts.critica++;
-    else if (c === 'Alta') counts.alta++;
-    else if (c === 'Média') counts.media++;
-    else if (c === 'Baixa') counts.baixa++;
-    else counts.info++;
+    const bucket = classifyCriticidade(v.criticidade || v.severity || 'Info');
+    counts[bucket]++;
   }
   return counts;
 }
 
-function normalizeCriticidade(value) {
+/**
+ * Map any criticidade/severity string to one of the summary bucket keys.
+ * Handles both accented ("Crítica") and unaccented ("Critica") forms,
+ * as well as English equivalents.
+ */
+function classifyCriticidade(value) {
   const lower = (value || '').toLowerCase();
-  if (lower.includes('crít') || lower.includes('crit') || lower === 'critical') return 'Crítica';
-  if (lower.includes('alta') || lower === 'high') return 'Alta';
-  if (lower.includes('méd') || lower.includes('med') || lower === 'medium') return 'Média';
-  if (lower.includes('baixa') || lower === 'low') return 'Baixa';
-  return 'Info';
+  if (lower.includes('crít') || lower.includes('crit') || lower === 'critical') return 'critica';
+  if (lower.includes('alta') || lower === 'high') return 'alta';
+  if (lower.includes('méd') || lower.includes('med') || lower === 'medium') return 'media';
+  if (lower.includes('baixa') || lower === 'low') return 'baixa';
+  return 'info';
 }
 
 // ---------------------------------------------------------------------------
